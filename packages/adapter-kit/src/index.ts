@@ -298,7 +298,7 @@ export interface AdapterCapabilities {
   readonly protocol: string;
   readonly quotes: readonly ("sep38_firm" | "sep38_indicative" | "native" | "none")[];
   readonly kyc: "sep12" | "sep6_fields" | "bespoke" | "none";
-  readonly settlement: readonly string[];
+  readonly settlement: readonly DepositInstructions["kind"][];
   readonly refunds: "request" | "report_only" | "none";
   readonly callbacks: boolean;
 }
