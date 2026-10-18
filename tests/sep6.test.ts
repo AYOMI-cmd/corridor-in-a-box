@@ -678,6 +678,40 @@ describe("getTransaction", () => {
     expect(r.value.settled).toBe(true);
   });
 
+  it("reports a refund the anchor made, in the amount-in denomination", async () => {
+    const r = await getTx({
+      transaction: {
+        status: "refunded",
+        amount_in: "5.00",
+        amount_in_asset: "stellar:USDC:GISSUER",
+        refunds: {
+          amount_refunded: "5.00",
+          amount_fee: "0.10",
+          payments: [{ id: "abc123", id_type: "stellar", amount: "4.90", fee: "0.10" }],
+        },
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.terminalFailure).toBe(true);
+    expect(r.value.refunds?.payments).toHaveLength(1);
+    expect(r.value.refunds?.payments[0]?.amount).toEqual({
+      asset: "stellar:USDC:GISSUER",
+      amount: "4.90",
+    });
+  });
+
+  it("ignores a malformed refunds object without failing the poll", async () => {
+    const r = await getTx({
+      transaction: { status: "completed", refunds: { amount_refunded: 5 } },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.refunds).toBeUndefined();
+      expect(r.value.settled).toBe(true);
+    }
+  });
+
   it("names the bridge asset when the anchor reports an amount without one", async () => {
     const r = await getTx({ transaction: { status: "completed", amount_in: "5.00" } });
     expect(r.ok && r.value.amountIn).toEqual({ asset: "USDC", amount: "5.00" });

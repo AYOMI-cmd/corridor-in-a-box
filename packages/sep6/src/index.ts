@@ -35,6 +35,7 @@ import {
   type PaymentIntent,
 } from "@corridor/types";
 import {
+  parseRefunds,
   totalPriceProblem,
   type AdapterCapabilities,
   type AnchorAdapter,
@@ -965,6 +966,7 @@ export class Sep6Adapter implements AnchorAdapter {
             withdraw_anchor_account?: unknown;
             withdraw_memo?: unknown;
             withdraw_memo_type?: unknown;
+            refunds?: unknown;
           }
         | undefined;
       if (!tx || typeof tx.status !== "string") {
@@ -976,6 +978,14 @@ export class Sep6Adapter implements AnchorAdapter {
       }
       const mapped = mapSep6Status(tx.status);
       const asset = nonEmptyString(tx.amount_in_asset) ?? this.settlementAsset;
+      // SEP-6 reports a refund on the same record; parsed by the helper SEP-31 uses, and
+      // kept apart from the classification above so a malformed `refunds` object can
+      // never turn a readable status into an error.
+      const refunds = parseRefunds(
+        tx.refunds,
+        asset,
+        typeof tx.amount_in === "string" ? tx.amount_in : undefined,
+      );
       const amountIn = amountString(tx.amount_in);
       const depositAddress = nonEmptyString(tx.withdraw_anchor_account);
       const memo = nonEmptyString(tx.withdraw_memo);
@@ -983,6 +993,7 @@ export class Sep6Adapter implements AnchorAdapter {
 
       return ok<TransactionStatus>({
         ...mapped,
+        ...(refunds ? { refunds } : {}),
         ...(amountIn !== undefined ? { amountIn: { asset, amount: amountIn } } : {}),
         ...(depositAddress !== undefined ? { depositAddress } : {}),
         ...(memo !== undefined ? { memo } : {}),
