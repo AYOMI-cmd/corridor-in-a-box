@@ -34,14 +34,15 @@ import {
   type Outcome,
   type PaymentIntent,
 } from "@corridor/types";
-import type {
-  AdapterCapabilities,
-  AnchorAdapter,
-  KycResult,
-  OpenTransaction,
-  Quote,
-  RefundRef,
-  TransactionStatus,
+import {
+  totalPriceProblem,
+  type AdapterCapabilities,
+  type AnchorAdapter,
+  type KycResult,
+  type OpenTransaction,
+  type Quote,
+  type RefundRef,
+  type TransactionStatus,
 } from "@corridor/adapter-kit";
 
 type FetchLike = typeof fetch;
@@ -588,6 +589,7 @@ export class Sep6Adapter implements AnchorAdapter {
             expires_at?: unknown;
             sell_amount?: unknown;
             buy_amount?: unknown;
+            total_price?: unknown;
             fee?: { total?: unknown; asset?: unknown };
           }
         | undefined;
@@ -606,6 +608,16 @@ export class Sep6Adapter implements AnchorAdapter {
       // same rule @corridor/sep31 applies: the firm quote binds to the anchor's
       // number, and settling ours instead means the payout will not match.
       const sellAmount = amountString(j?.sell_amount) ?? intent.sourceAmount.amount;
+
+      // SEP-38: total_price (fees included) x buy_amount must land on sell_amount. Same
+      // check, same helper, as the SEP-31 firm path.
+      const inconsistent = totalPriceProblem({
+        quoteId: id,
+        totalPrice: amountString(j?.total_price),
+        buyAmount,
+        sellAmount,
+      });
+      if (inconsistent) return fail("QUOTE_UNAVAILABLE", `${this.name}: ${inconsistent}`);
 
       let fee: Money | undefined;
       if (j?.fee) {

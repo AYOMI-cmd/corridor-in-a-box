@@ -827,6 +827,42 @@ describe("requestQuote", () => {
     expect(!r.ok && r.error.message).toContain("does not match sell asset");
   });
 
+  it("refuses a firm quote whose total_price x buy_amount does not match sell_amount", async () => {
+    const { fn } = fakeFetch({
+      "POST /sep38/quote": res({
+        id: "q-inconsistent",
+        price: "250",
+        total_price: "0.002", // 1250.00 x 0.002 = 2.50, but sell_amount is 5.00
+        buy_amount: "1250.00",
+        sell_amount: "5.00",
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    });
+    const c = corridor(endpoints);
+    const r = await new Sep6Adapter(c, { fetchImpl: fn }).requestQuote(intent, c);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe("QUOTE_UNAVAILABLE");
+      expect(r.error.message).toContain("internally inconsistent");
+    }
+  });
+
+  it("accepts a firm quote whose total_price agrees with sell_amount", async () => {
+    const { fn } = fakeFetch({
+      "POST /sep38/quote": res({
+        id: "q-consistent",
+        price: "250",
+        total_price: "0.004", // 1250.00 x 0.004 = 5.00
+        buy_amount: "1250.00",
+        sell_amount: "5.00",
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    });
+    const c = corridor(endpoints);
+    const r = await new Sep6Adapter(c, { fetchImpl: fn }).requestQuote(intent, c);
+    expect(r.ok).toBe(true);
+  });
+
   it("treats a 5xx quote failure as retryable", async () => {
     const { fn } = fakeFetch({ "POST /sep38/quote": res({}, false, 503) });
     const c = corridor(endpoints);
