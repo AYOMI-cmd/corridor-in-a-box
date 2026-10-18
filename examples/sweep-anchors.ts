@@ -1,113 +1,93 @@
-// Probe anchors and emit a JSON + markdown report.
+// Probe every tracked anchor and emit JSON + markdown reports.
 //
-//   pnpm sweep:anchors [--out <dir|file.json>] [domain ...]   (alias: pnpm probe:sweep)
+//   pnpm sweep:anchors --out /tmp/sweep                 (alias: pnpm probe:sweep)
+//   pnpm sweep:anchors testanchor.stellar.org cowrie.exchange --out /tmp/sweep
+//   pnpm sweep:anchors --out sweep.json                 (a .json path names the results file)
+//   pnpm sweep:anchors                                  (print the markdown table only)
 //
-// Probes each domain exactly once, prints the human-readable outcome, and writes
-// the exact ProbeResult array (`sweep.json`) plus a markdown table (`sweep.md`).
-// `--out` is a directory (default `sweep/`) or a `.json` file path. The workflow
-// attests from `sweep.json` (`pnpm attest --from`), so what is attested is what was
-// observed, not a second probe.
+// Credential-free and read-only: anyone can run this without keys to answer
+// "across every anchor we track, what works today?". Each domain is probed exactly
+// once, with bounded concurrency (`--concurrency`, default 4).
+//
+// `--out <dir>` writes three files:
+//   sweep.json         the exact ProbeResults. `pnpm attest --from` reads this one, so
+//                      what is attested is what was observed, not a second probe.
+//   sweep.md           one table row per domain, for humans and the Actions summary.
+//   sweep-report.json  the decoded view: SEPs and probes by name, receive assets, timestamp.
+//
+// A domain that cannot be probed at all is recorded as a failed `toml_fetch`, like any
+// other unreachable anchor. The script exits 1 only if the sweep itself could not run.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  decodeProbes,
-  decodeSeps,
   loadFleet,
-  probeAnchor,
+  parseSweepArgs,
   renderSweepJson,
   renderSweepMarkdown,
-  type ProbeResult,
+  renderSweepReportJson,
+  sweepAnchors,
 } from "@corridor/probe";
 
-interface SweepArgs {
-  out: string;
-  domains: string[];
-}
-
-function parseSweepArgs(args: readonly string[]): SweepArgs {
-  let out = "sweep";
-  const domains: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--out" && i + 1 < args.length) {
-      out = args[++i];
-    } else if (arg.startsWith("--out=")) {
-      out = arg.slice("--out=".length);
-    } else if (!arg.startsWith("-")) {
-      domains.push(arg);
-    }
-  }
-  return { out, domains };
-}
-
 async function main(): Promise<void> {
-  const { out, domains } = parseSweepArgs(process.argv.slice(2));
-  const targetDomains = domains.length > 0 ? domains : loadFleet().domains;
+  const { domains: cliDomains, outDir, concurrency } = parseSweepArgs(process.argv.slice(2));
 
-  console.log(`probing ${targetDomains.length} anchor(s): ${targetDomains.join(" ")}\n`);
-
-  const results: ProbeResult[] = [];
-  const failedDomains: string[] = [];
-  for (const domain of targetDomains) {
-    console.log(`probing ${domain}`);
+  let domains = cliDomains;
+  if (domains.length === 0) {
     try {
-      const r = await probeAnchor(domain);
-      for (const o of r.outcomes) {
-        console.log(`  ${o.passed ? "✓" : "✗"} ${o.probe.padEnd(13)} ${o.detail}`);
-      }
-
-      const advertised = decodeSeps(r.seps);
-      const failed = decodeProbes(r.probesRun).filter(
-        (p) => !decodeProbes(r.probesPassed).includes(p),
-      );
-
-      console.log(`\n--- attestation for ${r.domain} ---`);
-      console.log(
-        `  advertises     ${advertised.map((n) => `SEP-${n}`).join(", ") || "none"}`,
-      );
-      console.log(`  probes passed  ${decodeProbes(r.probesPassed).join(", ") || "none"}`);
-      console.log(`  probes FAILED  ${failed.join(", ") || "none"}`);
-      console.log(`  toml_hash      ${r.tomlHash}`);
-      console.log(
-        `  seps=${r.seps} probes_run=${r.probesRun} probes_passed=${r.probesPassed}\n`,
-      );
-
-      results.push(r);
-    } catch (err) {
-      console.error(`  ✗ failed to probe ${domain}:`, err);
-      failedDomains.push(domain);
+      domains = [...loadFleet().domains];
+    } catch (e) {
+      console.error("✗ failed to load contracts/anchors.json:", e);
+      process.exit(1);
     }
   }
 
-  // Determine output file paths
-  let jsonPath: string;
-  let mdPath: string;
-  if (out.endsWith(".json")) {
-    jsonPath = out;
-    mdPath = out.replace(/\.json$/, ".md");
-    const dir = dirname(out);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  } else {
-    // Directory target
-    if (!existsSync(out)) mkdirSync(out, { recursive: true });
-    jsonPath = join(out, "sweep.json");
-    mdPath = join(out, "sweep.md");
+  if (domains.length === 0) {
+    console.error("✗ no domains to sweep");
+    process.exit(1);
   }
 
-  writeFileSync(jsonPath, renderSweepJson(results), "utf8");
-  writeFileSync(mdPath, renderSweepMarkdown(results), "utf8");
-  console.log(`✓ wrote sweep report to ${jsonPath} and ${mdPath}`);
+  console.log(
+    `Sweeping ${domains.length} anchor(s) with concurrency ${concurrency ?? 4}...\n`,
+  );
 
-  // A probe that could not run at all is not a finding about the anchor; fail the
-  // run (after the report is written) rather than silently attesting a short list.
-  if (failedDomains.length > 0) {
-    console.error(`✗ could not probe: ${failedDomains.join(", ")}`);
+  const results = await sweepAnchors(domains, {
+    concurrency,
+    onProgress: (r, idx, total) => {
+      console.log(`[${idx + 1}/${total}] ${r.domain}: probes passed=${r.probesPassed}`);
+    },
+  });
+
+  const timestamp = new Date().toISOString();
+  const mdReport = renderSweepMarkdown(results, { timestamp });
+
+  if (!outDir) {
+    console.log("\n" + mdReport);
+    return;
+  }
+
+  // `--out foo.json` names the results file; anything else is a directory.
+  const asFile = outDir.endsWith(".json");
+  const dir = asFile ? dirname(outDir) : outDir;
+  const jsonPath = asFile ? outDir : join(dir, "sweep.json");
+  const mdPath = asFile ? outDir.replace(/\.json$/, ".md") : join(dir, "sweep.md");
+  const reportPath = asFile
+    ? outDir.replace(/\.json$/, "-report.json")
+    : join(dir, "sweep-report.json");
+
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(jsonPath, renderSweepJson(results), "utf8");
+    writeFileSync(mdPath, mdReport, "utf8");
+    writeFileSync(reportPath, renderSweepReportJson(results, { timestamp }), "utf8");
+    console.log(`\n✓ Wrote reports to:\n  ${jsonPath}\n  ${mdPath}\n  ${reportPath}`);
+  } catch (e) {
+    console.error(`✗ failed to write report files to ${outDir}:`, e);
     process.exit(1);
   }
 }
 
 main().catch((e) => {
-  console.error(e);
+  console.error("✗ sweep failed:", e);
   process.exit(1);
 });
