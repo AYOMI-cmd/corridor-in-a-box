@@ -29,7 +29,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCorridor, type Corridor } from "@corridor/manifest";
-import { StaticRouteResolver } from "@corridor/router";
+import { StaticRouteResolver, createAdapterRegistry } from "@corridor/router";
 import { Sep31Adapter } from "@corridor/sep31";
 import {
   LocalKeypairSigner,
@@ -100,6 +100,28 @@ async function buildStore(): Promise<{ store: IdempotencyStore; close: () => Pro
   return { store: new PostgresIdempotencyStore(pool), close: () => pool.end() };
 }
 
+/** Protocol -> adapter. Register `sep6` / `custom:<id>` here as those adapters are wired. */
+function buildAdapterRegistry(sep10: StellarSep10Signer) {
+  const registry = createAdapterRegistry();
+  registry.register("sep31", (corridor) => new Sep31Adapter(corridor, { sep10 }));
+  return registry;
+}
+
+/** Fail at startup, not at the first payment, when a manifest names a protocol with no adapter. */
+function validateCorridors(
+  corridors: Map<string, Corridor>,
+  registry: ReturnType<typeof buildAdapterRegistry>,
+): void {
+  for (const c of corridors.values()) {
+    if (!registry.has(c)) {
+      console.error(
+        `✗ corridor "${c.id}" uses protocol "${c.dest.protocol}" but no adapter is registered for it`,
+      );
+      process.exit(1);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const corridors = loadCorridors();
   if (corridors.size === 0) {
@@ -114,8 +136,11 @@ async function main(): Promise<void> {
   const { store, close } = await buildStore();
   const metrics = new PrometheusMetrics();
 
+  const adapters = buildAdapterRegistry(sep10);
+  validateCorridors(corridors, adapters);
+
   const deps: EngineDeps = {
-    resolver: new StaticRouteResolver((corridor) => new Sep31Adapter(corridor, { sep10 }), {
+    resolver: new StaticRouteResolver((corridor) => adapters.adapterFor(corridor), {
       trustManifestWithoutAttestation: true,
     }),
     submitter,
