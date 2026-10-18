@@ -59,6 +59,15 @@
 //! the entry back live, and then call `bump(domain)` to extend it again. Restoring
 //! the contract instance the same way brings back `Admin`, `Attester` and
 //! `domains()`.
+//!
+//! ## Migration
+//!
+//! When updating the registry contract in place via `upgrade()` (see `upgrade`
+//! in the implementation below), existing anchor records are retained as-is in
+//! storage. Because new probe bits are strictly appended, existing records
+//! maintain their validity and previous bit meanings. Old records written
+//! before new probes were added will read `serves_sep6 == false` until they are
+//! re-attested by an attester that runs the new probes.
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
@@ -157,6 +166,41 @@ pub enum Error {
 
 const SEP_MASK: u32 = (1u32 << SEP_NUMBERS.len()) - 1;
 const PROBE_MASK: u32 = (1u32 << PROBE_NAMES.len()) - 1;
+
+pub const fn sep_bit(sep: u32) -> Option<u32> {
+    let mut i = 0;
+    while i < SEP_NUMBERS.len() {
+        if SEP_NUMBERS[i] == sep {
+            return Some(1u32 << i);
+        }
+        i += 1;
+    }
+    None
+}
+
+pub const fn probe_bit(name: &str) -> Option<u32> {
+    let mut i = 0;
+    while i < PROBE_NAMES.len() {
+        let a = PROBE_NAMES[i].as_bytes();
+        let b = name.as_bytes();
+        if a.len() == b.len() {
+            let mut j = 0;
+            let mut eq = true;
+            while j < a.len() {
+                if a[j] != b[j] {
+                    eq = false;
+                    break;
+                }
+                j += 1;
+            }
+            if eq {
+                return Some(1u32 << i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
 
 /// Emitted on every accepted attestation, so indexers and dashboards can follow
 /// the registry without polling every key.
@@ -344,10 +388,27 @@ impl Registry {
     /// Whether the domain both advertises SEP-31 and passed the SEP-31 probe.
     /// The question an operator actually has, answered without a decoder ring.
     pub fn serves_sep31(env: Env, domain: String) -> Result<bool, Error> {
+        Self::serves(env, domain, 31)
+    }
+
+    /// Whether the domain both advertises SEP-6 and passed the sep6_info probe.
+    pub fn serves_sep6(env: Env, domain: String) -> Result<bool, Error> {
+        Self::serves(env, domain, 6)
+    }
+
+    /// Generic query: whether the domain advertises the given SEP and passed
+    /// its defined probe. Returns false for SEPs with no defined probe.
+    pub fn serves(env: Env, domain: String, sep: u32) -> Result<bool, Error> {
         let r = Self::get_anchor(env, domain)?;
-        let sep31_bit = 1u32 << 5; // index of 31 in SEP_NUMBERS
-        let probe_bit = 1u32 << 4; // index of sep31_info in PROBE_NAMES
-        Ok(r.seps & sep31_bit != 0 && r.probes_passed & probe_bit != 0)
+        let (sep_bit, probe_bit) = match sep {
+            31 => (sep_bit(31), probe_bit("sep31_info")),
+            6 => (sep_bit(6), probe_bit("sep6_info")),
+            _ => return Ok(false),
+        };
+        let (Some(sb), Some(pb)) = (sep_bit, probe_bit) else {
+            return Ok(false);
+        };
+        Ok(r.seps & sb != 0 && r.probes_passed & pb != 0)
     }
 
     pub fn admin(env: Env) -> Result<Address, Error> {
