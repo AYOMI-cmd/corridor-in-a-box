@@ -48,7 +48,7 @@ import {
   type SettlementStrategyContext,
   type SettlementSubmitter,
 } from "@corridor/engine";
-import type { Sep10Signer } from "@corridor/sep31";
+import type { Sep10Signer } from "@corridor/adapter-kit";
 
 function passphraseFor(network: "public" | "testnet"): string {
   return network === "public" ? Networks.PUBLIC : Networks.TESTNET;
