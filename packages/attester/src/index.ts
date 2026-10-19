@@ -22,7 +22,7 @@ import {
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
-import { probeBit, type ProbeResult } from "@corridor/probe";
+import { isCanonicalDomain, probeBit, type ProbeResult } from "@corridor/probe";
 import { err, fail, ok, type CorridorError, type Outcome } from "@corridor/types";
 
 export interface AttesterOptions {
@@ -123,6 +123,13 @@ export class AnchorAttester {
    * to start here rather than rely on the contract to catch it.
    */
   async attest(result: ProbeResult): Promise<Outcome<AttestationRef, AttesterError>> {
+    // The contract checks this too, and would revert. Checking it here is about
+    // the cost: a submission that reverts still gets simulated, and a domain in
+    // a non-canonical spelling would otherwise take a whole probe run plus a
+    // simulation to end up rejected.
+    const bad = nonCanonicalDomain(result.domain);
+    if (bad) return bad;
+
     if (result.probesPassed & ~result.probesRun) {
       return fail(
         "MANIFEST_INVALID",
@@ -156,6 +163,10 @@ export class AnchorAttester {
    * sweep may submit both halves in one ledger without one tripping the other.
    */
   async attestMeta(result: ProbeResult): Promise<Outcome<AttestationRef, AttesterError>> {
+    // `attest_meta` goes through the same on-chain domain gate as `attest`.
+    const bad = nonCanonicalDomain(result.domain);
+    if (bad) return bad;
+
     const ran = (result.probesRun & probeBit("sep31_info")) !== 0;
     if (!ran || result.receiveAssets === undefined) {
       return fail(
@@ -265,6 +276,17 @@ const REGISTRY_CODE_HINT: Record<number, string> = {
   3: "if the registry raised it: probes_passed set a bit probes_run did not (PassedExceedsRun)",
   4: "if the registry raised it: a SEP or probe bit the deployed registry does not know (UnknownBit); upgrade() the registry to the current PROBE_NAMES",
 };
+
+/** The local refusal shared by both submission paths, or undefined when the domain is fine. */
+function nonCanonicalDomain(domain: string): Outcome<never, AttesterError> | undefined {
+  if (isCanonicalDomain(domain)) return undefined;
+  return fail(
+    "MANIFEST_INVALID",
+    `refusing to attest ${JSON.stringify(domain)}: not a canonical home domain. ` +
+      `Lowercase letters, digits, dots and inner hyphens only — no scheme, port, path, ` +
+      `uppercase, or leading/trailing dot or hyphen.`,
+  );
+}
 
 /**
  * Map a raw host error onto the contract's own vocabulary where we can.
