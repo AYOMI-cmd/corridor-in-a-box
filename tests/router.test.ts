@@ -6,6 +6,7 @@ import {
   UnattestedAnchorError,
   createAdapterRegistry,
   loadResolver,
+  ROUTE_RESOLVER_API_VERSION,
   type AttestationSource,
   type LoadResolverCtx,
   type RouteDecision,
@@ -344,6 +345,14 @@ describe("createAdapterRegistry", () => {
       trustManifestWithoutAttestation: true,
     });
     await expect(resolver.resolve(intent, sep6Corridor("c6"))).rejects.toThrow(/sep6/);
+  });
+});
+
+// --- the factory contract version exported for loaders ---------------------
+
+describe("ROUTE_RESOLVER_API_VERSION", () => {
+  it("is exported as the integer 1, the version documented in docs/route-resolver.md", () => {
+    expect(ROUTE_RESOLVER_API_VERSION).toBe(1);
   });
 });
 
