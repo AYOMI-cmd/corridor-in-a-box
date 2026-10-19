@@ -180,6 +180,20 @@ describe("attest-from metadata round trip (#242)", () => {
     expect(loaded.receiveAssets).toEqual([]);
   });
 
+  it("accepts the list under the name sep31ReceiveAssets and exposes both names", () => {
+    const loaded = parseProbeResults([
+      { ...sampleResult, sep31ReceiveAssets: ["NGN", "KES"] },
+    ])[0]!;
+    expect(loaded.receiveAssets).toEqual(["NGN", "KES"]);
+    expect(loaded.sep31ReceiveAssets).toEqual(["NGN", "KES"]);
+  });
+
+  it("applies the same checks to sep31ReceiveAssets", () => {
+    expect(() =>
+      parseProbeResults({ ...sampleResult, sep31ReceiveAssets: ["NGN", ""] }),
+    ).toThrow(/invalid receiveAssets/);
+  });
+
   it("loads a result written before metadata existed", () => {
     const loaded = roundTrip(sampleResult);
     expect("receiveAssets" in loaded).toBe(false);

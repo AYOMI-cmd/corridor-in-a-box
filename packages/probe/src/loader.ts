@@ -157,17 +157,20 @@ export function parseProbeResults(input: unknown): ProbeResult[] {
     // the way the contract demands: this is where a hand-edited file stops being
     // a surprise later, and an empty receive list is a real finding worth
     // keeping rather than dropping.
+    // `sep31ReceiveAssets` is the same list under the name #231 asked for; a file may
+    // carry either (or both, as probeAnchor writes), and either gets the same checks.
+    const rawAssets = item.receiveAssets ?? item.sep31ReceiveAssets;
     let receiveAssets: string[] | undefined;
-    if (item.receiveAssets !== undefined) {
+    if (rawAssets !== undefined) {
       if (
-        !Array.isArray(item.receiveAssets) ||
-        !item.receiveAssets.every((a) => typeof a === "string" && a.length > 0)
+        !Array.isArray(rawAssets) ||
+        !rawAssets.every((a) => typeof a === "string" && a.length > 0)
       ) {
         throw new Error(
           `Probe result for ${domain} has an invalid receiveAssets list (expected an array of asset codes)`,
         );
       }
-      receiveAssets = item.receiveAssets as string[];
+      receiveAssets = rawAssets as string[];
     }
 
     if (item.country !== undefined && !ALPHA2_REGEX.test(String(item.country))) {
@@ -184,7 +187,7 @@ export function parseProbeResults(input: unknown): ProbeResult[] {
       probesPassed,
       tomlHash,
       outcomes,
-      ...(receiveAssets ? { receiveAssets } : {}),
+      ...(receiveAssets ? { receiveAssets, sep31ReceiveAssets: receiveAssets } : {}),
       ...(country ? { country } : {}),
     };
   });
